@@ -84,7 +84,8 @@ export function promptSheet({ title, value = '', placeholder = '', ok = 'Сох�
     let result = null;
     const input = h('input.input', { type, value, placeholder, autocomplete: 'off', enterKeyHint: 'done' });
     const submit = () => { result = input.value; sheet.close(); };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    // preventDefault обязателен: иначе Enter «нажмёт» кнопку, на которую вернётся фокус, и окно откроется снова
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
     const sheet = openSheet({
       title, cls: 'menu-sheet confirm-sheet', onClose: () => resolve(result),
       body: h('div', null, text && h('p.confirm-text', null, text), input,

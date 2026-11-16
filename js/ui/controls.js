@@ -1,7 +1,7 @@
 // Повторно используемые элементы форм: переключатели, чипы, выбор даты, цвета, повторов.
 
 import { h, fill } from './dom.js';
-import { today, addDays, WD_SHORT, WEEK_ORDER, fmtRel } from '../core/dates.js';
+import { today, addDays, WD_SHORT, WEEK_ORDER, fmtRel, fmtShort } from '../core/dates.js';
 import { COLORS } from '../core/schema.js';
 import { REPEAT_OPTIONS } from '../core/recur.js';
 
@@ -41,14 +41,16 @@ export function datePicker(value, onchange, { allowNone = true } = {}) {
   const set = (v) => { value = v; draw(); onchange(value); };
   const draw = () => {
     const t = today(), tm = addDays(t, 1);
-    const input = h('input.chip.date-input' + (value && value !== t && value !== tm ? '.active' : ''), {
-      type: 'date', value: value || '', 'aria-label': 'Выбрать дату',
+    // Свой чип поверх системного поля даты: на iPhone пустое поле даты выглядит как пустой прямоугольник
+    const custom = value && value !== t && value !== tm;
+    const input = h('input.date-overlay', { type: 'date', value: value || '', 'aria-label': 'Выбрать дату',
       onchange: (e) => { if (e.target.value || allowNone) set(e.target.value || null); },
-    });
+      onclick: (e) => { try { e.target.showPicker?.(); } catch { /* откроется штатно */ } } });
+    const pick = h('label.chip.date-chip' + (custom ? '.active' : ''), null, '📅 ', custom ? fmtShort(value) : 'Дата…', input);
     fill(el, 
       h('button.chip' + (value === t ? '.active' : ''), { type: 'button', onclick: () => set(t) }, 'Сегодня'),
       h('button.chip' + (value === tm ? '.active' : ''), { type: 'button', onclick: () => set(tm) }, 'Завтра'),
-      input,
+      pick,
       allowNone && h('button.chip' + (!value ? '.active' : ''), { type: 'button', onclick: () => set(null) }, 'Без даты'),
     );
   };

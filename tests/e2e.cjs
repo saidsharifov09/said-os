@@ -348,6 +348,210 @@ test('.ics для Календаря iPhone с напоминаниями', asyn
   await closeSheet(p); await closeSheet(p);
 });
 
+test('блокнот: разделы, заметка, теги, картинка, закрепление, архив, перемещение', async (p) => {
+  await go(p, 'notes');
+  assert.equal(await p.locator('.section-card').count(), 12, '12 стартовых разделов');
+  // свой раздел: создать, переименовать, порядок, удалить
+  await p.click('text=Разделы');
+  await p.click('.sheet >> text=Новый раздел');
+  await p.fill('.confirm-sheet input', 'Рецепты');
+  await p.press('.confirm-sheet input', 'Enter');
+  await p.waitForTimeout(350);
+  let secs = await p.evaluate(async () => (await import('./js/core/selectors.js')).sections().map((s) => s.name));
+  assert.equal(secs[secs.length - 1], 'Рецепты');
+  await p.click('.section-manage:has-text("Рецепты") [aria-label="Выше"]');
+  secs = await p.evaluate(async () => (await import('./js/core/selectors.js')).sections().map((s) => s.name));
+  assert.equal(secs[secs.length - 2], 'Рецепты');
+  await p.click('.section-manage:has-text("Рецепты") [aria-label="Переименовать"]');
+  await p.fill('.confirm-sheet input', 'Кулинария');
+  await p.press('.confirm-sheet input', 'Enter');
+  await p.waitForTimeout(350);
+  await closeSheet(p);
+  const sec = (await all(p, 'sections')).find((s) => s.name === 'Кулинария');
+  assert.ok(sec);
+  // заметка в разделе
+  await go(p, 'notes/' + sec.id);
+  assert.equal(await p.textContent('#title'), 'Кулинария');
+  await p.fill('.quick-add', 'Быстрый рецепт');
+  await p.press('.quick-add', 'Enter');
+  await p.click('.note-card:has-text("Быстрый рецепт")');
+  await p.fill('.sheet .note-text', 'Мука, яйца. Подробнее: https://example.com/recipe');
+  assert.ok(await p.isVisible('.sheet .link-chip'));
+  await p.fill('.sheet input[aria-label="Новый тег"]', 'выпечка');
+  await p.press('.sheet input[aria-label="Новый тег"]', 'Enter');
+  // картинка 2000×1500 должна сжаться до 1280
+  const png = await p.evaluate(() => { const c = Object.assign(document.createElement('canvas'), { width: 2000, height: 1500 }); const x = c.getContext('2d'); x.fillStyle = '#39c'; x.fillRect(0, 0, 2000, 1500); return c.toDataURL('image/png').split(',')[1]; });
+  await p.setInputFiles('.sheet input[type=file]', { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+  await p.waitForSelector('.sheet .image-thumb');
+  await p.click('.sheet .toggle >> text=Закрепить наверху');
+  await closeSheet(p);
+  let note = (await all(p, 'notes')).find((n) => n.title === 'Быстрый рецепт');
+  assert.deepEqual(note.tags, ['выпечка']); assert.equal(note.pinned, true); assert.equal(note.images.length, 1);
+  const dim = await p.evaluate((src) => new Promise((res) => { const i = new Image(); i.onload = () => res([i.naturalWidth, i.naturalHeight]); i.src = src; }), note.images[0].data);
+  assert.deepEqual(dim, [1280, 960], 'изображение сжато');
+  assert.ok(note.images[0].data.startsWith('data:image/jpeg'));
+  // перемещение в другой раздел и архив
+  await p.click('.note-card:has-text("Быстрый рецепт")');
+  await p.selectOption('.sheet select', 'sec-ideas');
+  await p.click('.sheet .toggle >> text=В архиве');
+  await closeSheet(p);
+  note = (await all(p, 'notes')).find((n) => n.title === 'Быстрый рецепт');
+  assert.equal(note.sectionId, 'sec-ideas'); assert.equal(note.archived, true);
+  await go(p, 'notes/sec-ideas');
+  assert.equal(await p.locator('.note-card:has-text("Быстрый рецепт")').count(), 0, 'архивная заметка скрыта');
+  await p.click('.chip >> text=Архив');
+  assert.ok(await p.isVisible('.note-card:has-text("Быстрый рецепт")'));
+  await p.click('.chip >> text=Архив');
+  // удаление раздела: заметки переезжают в «Разное»
+  await act(p, 'addNote', { sectionId: sec.id, title: 'Останется жить' });
+  await act(p, 'deleteSection', sec.id);
+  assert.equal((await all(p, 'notes')).find((n) => n.title === 'Останется жить').sectionId, 'sec-misc');
+});
+
+test('посмотреть позже: быстрая ссылка, тип, просмотрено', async (p) => {
+  await go(p, 'later');
+  await p.fill('.quick-add', 'https://www.youtube.com/watch?v=abc');
+  await p.press('.quick-add', 'Enter');
+  await p.fill('.quick-add', 'Дюна 2');
+  await p.press('.quick-add', 'Enter');
+  let items = (await all(p, 'notes')).filter((n) => n.sectionId === 'sec-later');
+  const video = items.find((n) => n.url.includes('youtube'));
+  assert.equal(video.kind, 'video'); assert.equal(video.title, 'youtube.com');
+  assert.ok(await p.isVisible('.later-row:has-text("youtube.com") a[href*="youtube"]'));
+  await p.click('.later-row:has-text("Дюна 2") .task-main');
+  await p.click('.sheet .chip >> text=Фильм');
+  await closeSheet(p);
+  await p.click('.chips.scroll .chip >> text=Фильм');
+  assert.equal(await p.locator('.later-row').count(), 1);
+  await p.click('.later-row:has-text("Дюна 2") .check');
+  await p.waitForTimeout(150);
+  assert.equal(await p.locator('.later-row').count(), 0);
+  await p.click('.chip >> text=Просмотренные');
+  assert.ok(await p.isVisible('.later-row.done:has-text("Дюна 2")'));
+  await p.click('.chip >> text=Просмотренные'); await p.click('.chips.scroll .chip >> text=Все');
+});
+
+test('цели: этапы, привязанные задачи, прогресс', async (p) => {
+  await go(p, 'goals');
+  await p.click('text=Новая цель');
+  await p.fill('.sheet .title-input', 'Пробежать 10 км');
+  await p.fill('.sheet input[type=date]', plusDays(60));
+  for (const m of ['Купить кроссовки', 'Пробежать 5 км']) { await p.fill('.sheet .checklist-add', m); await p.press('.sheet .checklist-add', 'Enter'); }
+  await closeSheet(p);
+  const goal = (await all(p, 'goals')).find((g) => g.title === 'Пробежать 10 км');
+  assert.equal(goal.milestones.length, 2); assert.equal(goal.deadline, plusDays(60));
+  await p.click('.goal-card:has-text("Пробежать 10 км")');
+  await p.fill('.sheet input[aria-label="Новая задача для цели"]', 'Составить план тренировок');
+  await p.press('.sheet input[aria-label="Новая задача для цели"]', 'Enter');
+  await p.fill('.sheet input[aria-label="Новая задача для цели"]', 'Найти маршрут');
+  await p.press('.sheet input[aria-label="Новая задача для цели"]', 'Enter');
+  await p.click('.sheet .checklist >> nth=0 >> .check >> nth=0');
+  await closeSheet(p);
+  const task = (await all(p, 'tasks')).find((t) => t.title === 'Составить план тренировок');
+  assert.equal(task.goalId, goal.id);
+  assert.match(await p.textContent('.goal-card:has-text("Пробежать 10 км")'), /25%/); // 1 из 4
+  await act(p, 'toggleTask', task.id);
+  await p.waitForTimeout(100);
+  assert.match(await p.textContent('.goal-card:has-text("Пробежать 10 км")'), /50%/);
+  assert.match(await p.textContent('.goal-card:has-text("Пробежать 10 км")'), /осталось 60 дней/);
+});
+
+test('привычки: отметки, серия, статистика', async (p) => {
+  await go(p, 'habits');
+  await p.click('text=Новая привычка');
+  await p.fill('.sheet .title-input', 'Прогулка');
+  await closeSheet(p);
+  const hb = (await all(p, 'habits')).find((x) => x.title === 'Прогулка');
+  for (const n of [1, 2, 3]) await act(p, 'toggleHabit', hb.id, plusDays(-n));
+  await p.waitForTimeout(100);
+  assert.match(await p.textContent('.habit-row:has-text("Прогулка") .streak'), /3/);
+  await p.click('.habit-row:has-text("Прогулка") .habit-day.today');
+  await p.waitForTimeout(150);
+  assert.match(await p.textContent('.habit-row:has-text("Прогулка") .streak'), /4/);
+  const st = await p.evaluate(async (id) => { const s = await import('./js/core/selectors.js'); const st = await import('./js/core/store.js'); const h = st.get('habits', id); return { w: s.habitStats(h, 7), best: s.habitBest(h), streak: s.habitStreak(h) }; }, hb.id);
+  assert.equal(st.w.done, 4); assert.equal(st.best, 4); assert.equal(st.streak, 4);
+  await p.click('.habit-row:has-text("Прогулка") .task-main');
+  assert.ok(await p.isVisible('.sheet .habit-grid'));
+  assert.match(await p.textContent('.sheet .stat-row'), /🔥 4/);
+  await p.click('.sheet .habit-cell.today');
+  await p.waitForTimeout(100);
+  assert.match(await p.textContent('.sheet .stat-row'), /🔥 3/);
+  await closeSheet(p);
+  await go(p, 'today');
+  assert.ok(await p.isVisible('.habit-chip:has-text("Прогулка")'));
+});
+
+test('история: запись, типы, поиск, связь с задачей и событием', async (p) => {
+  await go(p, 'log');
+  await p.selectOption('.type-select', 'learned');
+  await p.fill('.quick-add', 'Узнал про технику помодоро');
+  await p.press('.quick-add', 'Enter');
+  let log = await all(p, 'log');
+  const e = log.find((l) => l.text === 'Узнал про технику помодоро');
+  assert.equal(e.type, 'learned'); assert.equal(e.date, ymd());
+  // подробная запись
+  await p.click('[aria-label="Подробная запись"]');
+  await p.click('.sheet .chip >> text=С кем встречался');
+  await p.fill('.sheet .title-input', 'Кофе с коллегой');
+  await p.fill('.sheet input[placeholder="Имена через запятую"]', 'Анна');
+  await p.fill('.sheet input[placeholder="Место"]', 'Кофейня');
+  await closeSheet(p);
+  const m = (await all(p, 'log')).find((l) => l.text === 'Кофе с коллегой');
+  assert.equal(m.type, 'met'); assert.equal(m.people, 'Анна'); assert.equal(m.place, 'Кофейня');
+  // связь с задачей: из редактора задачи
+  const t = await act(p, 'addTask', { title: 'Сходить в банк', date: ymd() });
+  await p.evaluate(async (id) => (await import('./js/ui/edit-task.js')).openTaskEditor(id), t.id);
+  await p.click('.sheet >> text=Записать в историю');
+  await p.waitForSelector('.sheet .linked-chip');
+  await closeSheet(p);
+  assert.equal((await all(p, 'log')).find((l) => l.text === 'Сходить в банк').taskId, t.id);
+  assert.ok(await p.isVisible('.log-item:has-text("Сходить в банк") >> text=🔗'));
+  // выполненная задача автоматически видна в ленте
+  await act(p, 'toggleTask', t.id);
+  await p.waitForTimeout(100);
+  assert.ok(await p.isVisible('.log-item.auto:has-text("Сходить в банк")'));
+  // поиск и фильтр
+  await p.fill('input[data-keep="log-search"]', 'помодоро');
+  await p.waitForTimeout(100);
+  assert.equal(await p.locator('.log-item').count(), 1);
+  assert.equal(await p.evaluate(() => document.activeElement.dataset.keep), 'log-search', 'фокус в поиске сохраняется');
+  await p.fill('input[data-keep="log-search"]', '');
+  await p.click('.chips.scroll .chip >> text=С кем встречался');
+  assert.equal(await p.locator('.log-item').count(), 1);
+  await p.click('.chips.scroll .chip >> text=Всё');
+});
+
+test('фокус: одно дело и таймер', async (p) => {
+  await act(p, 'addTask', { title: 'Важное дело', date: ymd(), priority: 3 });
+  await go(p, 'focus');
+  assert.ok(await p.isVisible('.focus-task'));
+  await p.click('text=Всего 5 минут');
+  await p.waitForTimeout(1700);
+  assert.match(await p.textContent('#focus-timer'), /^04:5\d$/);
+  await p.click('text=Остановить');
+  assert.ok(await p.isVisible('text=25 минут'));
+});
+
+test('календарь .ics: экспорт и импорт', async (p, { name }) => {
+  if (name === 'phone') return;
+  await act(p, 'addEvent', { title: 'Событие для экспорта', date: plusDays(5), start: '13:00', duration: 90, repeat: { type: 'weekly' } });
+  await go(p, 'settings');
+  const [dl] = await Promise.all([p.waitForEvent('download'), p.click('text=Экспорт .ics')]);
+  const text = require('fs').readFileSync(await dl.path(), 'utf8');
+  assert.match(text, /SUMMARY:Событие для экспорта/); assert.match(text, /RRULE:FREQ=WEEKLY/);
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', 'UID:ext-1@test', 'SUMMARY:Импортированная встреча', `DTSTART:${plusDays(3).replace(/-/g, '')}T160000`, `DTEND:${plusDays(3).replace(/-/g, '')}T173000`, 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  for (const round of [1, 2]) {
+    const [chooser] = await Promise.all([p.waitForEvent('filechooser'), p.click('text=Импорт .ics')]);
+    await chooser.setFiles({ name: 'cal.ics', mimeType: 'text/calendar', buffer: Buffer.from(ics) });
+    await p.click('.confirm-sheet .btn-primary');
+    await p.waitForSelector(round === 1 ? '.toast >> text=Добавлено событий: 1' : '.toast >> text=пропущено повторов');
+    await p.waitForTimeout(300);
+  }
+  const evs = (await all(p, 'events')).filter((e) => e.title === 'Импортированная встреча');
+  assert.equal(evs.length, 1, 'повторный импорт не создаёт дубль');
+  assert.equal(evs[0].start, '16:00'); assert.equal(evs[0].duration, 90); assert.deepEqual(evs[0].repeat, { type: 'days', days: [1, 3] });
+});
+
 test('тема: светлая по умолчанию, тёмная и системная', async (p) => {
   await go(p, 'settings');
   await p.click('.segmented >> text=Светлая');
